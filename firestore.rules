@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isApprovedStudent(uid) {
+      return isOwner(uid)
+        && exists(/databases/$(database)/documents/students/$(uid))
+        && get(/databases/$(database)/documents/students/$(uid)).data.role == 'student'
+        && get(/databases/$(database)/documents/students/$(uid)).data.status == 'approved';
+    }
+
+    match /students/{uid} {
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'email', 'mobile', 'aadhaarLast4',
+          'address', 'role', 'status', 'createdAt'
+        ])
+        && request.resource.data.uid == uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.mobile.matches('^[0-9]{10}$')
+        && request.resource.data.aadhaarLast4.matches('^[0-9]{4}$')
+        && request.resource.data.address is string
+        && request.resource.data.address.size() > 0
+        && request.resource.data.address.size() <= 500
+        && request.resource.data.role == 'student'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time;
+
+      allow read: if isOwner(uid) || isAdmin();
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status in ['pending', 'approved', 'rejected'];
+      allow delete: if isAdmin();
+    }
+
+    match /uploads/{uploadId} {
+      allow create: if isApprovedStudent(request.resource.data.uid)
+        && request.resource.data.keys().hasOnly([
+          'uid', 'studentName', 'fileName', 'fileType',
+          'downloadUrl', 'storagePath', 'uploadedAt'
+        ])
+        && request.resource.data.studentName
+          == get(/databases/$(database)/documents/students/$(request.auth.uid)).data.name
+        && request.resource.data.fileName is string
+        && request.resource.data.fileName.size() > 0
+        && request.resource.data.fileName.size() <= 255
+        && request.resource.data.fileType in [
+          'image/jpeg', 'image/png', 'image/webp',
+          'video/mp4', 'video/quicktime', 'video/webm'
+        ]
+        && request.resource.data.downloadUrl is string
+        && request.resource.data.storagePath.matches(
+          'studentUploads/' + request.auth.uid + '/[^/]+'
+        )
+        && request.resource.data.uploadedAt == request.time;
+
+      allow read: if isApprovedStudent(resource.data.uid) || isAdmin();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+  }
+}

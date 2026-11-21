@@ -1,0 +1,34 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function isApprovedOwner(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && firestore.exists(/databases/(default)/documents/students/$(uid))
+        && firestore.get(/databases/(default)/documents/students/$(uid)).data.role == 'student'
+        && firestore.get(/databases/(default)/documents/students/$(uid)).data.status == 'approved';
+    }
+
+    function validMedia() {
+      return request.resource.contentType.matches('image/(jpeg|png|webp)')
+          && request.resource.size <= 10 * 1024 * 1024
+        || request.resource.contentType.matches('video/(mp4|quicktime|webm)')
+          && request.resource.size <= 50 * 1024 * 1024;
+    }
+
+    match /studentUploads/{uid}/{fileName} {
+      allow read: if isAdmin() || isApprovedOwner(uid);
+      allow create: if isApprovedOwner(uid) && validMedia();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+  }
+}
